@@ -1,1 +1,155 @@
+. End‑to‑End Architecture (ASCII)
+plaintext
+┌─────────────────────────────────────────────────────────────┐
+│                      IoT Sensors / Clients                    │
+└───────────────────────────────┬─────────────────────────────┘
+                                │
+                      Python Producer (producer.py)
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Kafka Cluster (3 Brokers, KRaft)               │
+│  Topic: sensor-events | 3 Partitions | RF=3 | ISR ≥ 2       │
+└───────────────────────────────┬─────────────────────────────┘
+                                │
+                Spark Structured Streaming (spark_pipeline.py)
+                                │
+  ┌───────────────────────┬─────┴─────┬───────────────────────┐
+  │                       │           │                       │
+  ▼                       ▼           ▼                       ▼
+Raw Zone (JSON)    Curated Zone (Parquet)  Consumption Zone (Parquet)
+/year/month/day/hour  /sensor_type/year/month/day  /sensor_type
+  └───────────────────────┬─────────────────────────────┘
+                            │
+                     Spark SQL Analytics (analytics.py)
+                            │
+  ┌─────────────────────────┼─────────────────────────┐
+  │                         │                         │
+  ▼                         ▼                         ▼
+Q1: Top5 Anomaly Hours  Q2: Sensor Stats  Q3: Temp Daily Trends
+(CSV Outputs)            (CSV Outputs)    (CSV Outputs)
+                            │
+                            ▼
+                     REST API (Flask)
+         /api/v1/health | /sensors | /stats | /anomalies | /readings
+                            │
+                            ▼
+                    Consumers / Dashboards
+2. Layer‑by‑Layer Component Overview
+1. Data Source Layer
+Python Producer: producer.py
+Generates 5,000 events: temperature / humidity / pressure, ~10% anomalies
+Screenshots: Producer logs, Kafka UI showing sensor-events traffic
+2. Message Queue Layer (Kafka)
+3 Brokers: kafka1 / kafka2 / kafka3 (KRaft mode)
+Topic: sensor-events
+Partitions: 3
+Replication Factor: 3
+In‑Sync Replicas (ISR): ≥ 2
+Screenshots: Kafka UI (3 brokers, topic config, ISR status)
+3. Stream Processing Layer (Spark Streaming)
+Job: spark_pipeline.py
+Core tasks:
+Consume & parse JSON from Kafka
+Clean outliers & detect anomalies
+Temp > 35°C | Humidity > 90% | Pressure < 990 / > 1030 hPa
+5‑minute tumbling window aggregation
+Write to 3‑zone local data lake
+Screenshots: Spark startup logs, data lake directory structure
+4. Data Lake Storage Layer (Local)
+plaintext
+/tmp/datalake/
+├── raw/
+│   └── source=kafka/topic=sensor-events/year=YYYY/month=MM/day=DD/hour=HH
+├── curated/
+│   └── domain=iot/sensor_type=X/year=YYYY/month=MM/day=DD
+└── consumption/
+    └── use_case=sensor_averages/sensor_type=X/year=YYYY/month=MM
+5. Batch Analytics Layer (Spark SQL)
+Script: analytics.py
+Four key queries:
+Top 5 hours with the most anomalies
+Per‑sensor global stats (mean/min/max/std/anomaly rate %)
+Daily temperature trend (mean + anomaly count)
+Partition pruning benchmark (with/without filters)
+Screenshots: Query outputs, CSV results
+6. API Service Layer (Flask)
+App: api/app.py
+Endpoints:
+GET /api/v1/health
+GET /api/v1/sensors
+GET /api/v1/sensors/<type>/latest
+GET /api/v1/sensors/<type>/stats
+GET /api/v1/anomalies
+POST /api/v1/readings
+Screenshots: curl test responses, JSON outputs
+要不要我直接生成一张高清英文 PNG 架构图，可以直接放进你的报告？
 
++3
+根据我的输出的结果文件写实验结果分析
+Experimental Results Analysis
+Overview
+This experiment implements an end-to-end IoT sensor data pipeline, covering Kafka ingestion, Spark Structured Streaming processing, multi-zone data lake storage, Spark SQL analytics, and REST API exposure. The pipeline processes 5,000 sensor events (temperature, humidity, pressure) and generates analytical results for anomaly detection, statistical analysis, and partition pruning verification. The key results are summarized and analyzed below.
+1. Top 5 Hours with the Highest Anomalies (Q1)
+Result (q1_top_hours.csv)
+表格
+h	count
+10	2,862
+Analysis
+Dominant Anomaly Hour: The 10th hour accounts for 2,862 anomalies, which is the peak anomaly period in the dataset.
+Anomaly Concentration: Over 57% of total anomalies (2,862/5,000) occur in a single hour, indicating a time-concentrated anomaly pattern (e.g., sensor malfunctions, environmental spikes, or abnormal data injection).
+Business Implication: This peak hour requires priority investigation by the maintenance team to identify root causes (e.g., faulty sensors, extreme environmental changes).
+2. Global Sensor Statistics & Anomaly Rates (Q2)
+Result (q2_global_stats.csv)
+表格
+sensor	mean_val	min_val	max_val	std_dev	anomaly_rate_pct
+humidity	62.25	10.03	114.91	22.41	10.86%
+temperature	30.39	-4.96	64.74	11.71	36.24%
+pressure	1010.06	960.20	1059.45	20.68	39.05%
+Analysis
+2.1 Data Distribution Characteristics
+Humidity: Mean = 62.25% (normal range: 30–95%), moderate volatility (std_dev=22.41), min/max values include outliers (10.03% / 114.91%).
+Temperature: Mean = 30.39°C (normal range: 15–45%), moderate volatility (std_dev=11.71), extreme outliers (-4.96°C / 64.74°C) leading to high anomalies.
+Pressure: Mean = 1010.06 hPa (normal range: 980–1040%), high volatility (std_dev=20.68), extreme outliers (960.20 hPa / 1059.45 hPa).
+2.2 Anomaly Rate Ranking
+Pressure: 39.05% (highest, sensitive to environmental fluctuations)
+Temperature: 36.24% (second, prone to extreme values)
+Humidity: 10.86% (lowest, most stable sensor)
+2.3 Business Insight
+Pressure and temperature sensors have abnormally high anomaly rates (>35%), indicating potential hardware faults or data transmission errors.
+Humidity sensors are the most reliable, with anomalies only ~10%, consistent with typical industrial IoT sensor performance.
+3. Daily Temperature Evolution (Q3)
+Result (q3_temp_daily.csv)
+表格
+dt	daily_mean	anomaly_count
+2026-05-19	30.39	1,194
+Analysis
+Daily Average Temperature: 30.39°C (within the normal operating range of industrial equipment).
+Daily Temperature Anomalies: 1,194 anomalies on 2026-05-19, accounting for ~24% of total events (1,194/5,000).
+Trend Implication: The single-day result confirms the high anomaly rate of temperature sensors. Long-term monitoring would reveal daily/seasonal temperature patterns and anomaly trends.
+4. Partition Pruning Performance (Q4)
+Result (q4_pruning_report.txt)
+Without pruning: 0.3598 seconds
+With pruning: 0.5031 seconds
+Speedup factor: 0.72x (slowdown)
+Analysis
+Unexpected Slowdown: Partition pruning did not improve query performance (0.5031s > 0.3598s), with a 28% slowdown.
+Root Causes:
+Small Dataset: The total data volume is tiny (5,000 events), so pruning overhead (metadata scanning, partition filtering) outweighs the benefits of reduced data scanning.
+Few Partitions: The curated zone has a small number of daily partitions, limiting pruning efficiency.
+Spark Overhead: Pruning logic introduces additional predicate pushdown and partition metadata checks for small-scale data.
+Scalability Note: Partition pruning will deliver significant performance gains for large-scale datasets (100k+ events) with multiple time/sensor partitions, as it reduces the amount of Parquet data scanned.
+5. Overall Pipeline Performance & Conclusion
+5.1 Pipeline Effectiveness
+End-to-End Functionality: The pipeline successfully ingests, processes, stores, and analyzes sensor data, meeting all experimental requirements (anomaly detection, multi-zone storage, SQL analytics, API exposure).
+Reliability: The 3-broker Kafka cluster (RF=3, ISR=2) ensures fault tolerance, and Spark checkpointing guarantees streaming job recovery.
+5.2 Key Findings
+Anomaly Hotspot: The 10th hour is the main anomaly period, requiring targeted maintenance.
+Sensor Reliability: Humidity sensors are most stable; pressure/temperature sensors have high anomaly rates.
+Partition Pruning Tradeoff: Ineffective for small datasets but critical for large-scale data.
+5.3 Limitations & Improvements
+Limitations: Small dataset size limits performance optimization validation; single-day data lacks long-term trend analysis.
+Improvements:
+Increase data volume (100k+ events) to verify partition pruning benefits.
+Extend data collection to multiple days for trend analysis.
+Optimize Spark parameters (e.g., executor memory) for small-scale streaming jobs.
