@@ -1,0 +1,2 @@
+Without pruning: 0.3598s
+With pruning: 0.5031s
